@@ -95,6 +95,8 @@ public class TestRunner
 
         for (TestInfo test : testInfos.values().stream().sorted(Comparator.comparing(TestInfo::name)).toList())
         {
+            System.out.println("===== TEST " + test.name + " =====");
+
             final int timeout = test.hasTimeout() ? Integer.valueOf(Files.readString(test.timeout)) : mainTimeout;
 
             // transform run directory
@@ -205,7 +207,6 @@ public class TestRunner
             if (timeout != -1 && !process.waitFor(timeout, TimeUnit.SECONDS))
             {
                 process.destroy();
-                System.out.println("===== TEST " + test.name + " =====");
                 System.out.printf("TIMEOUT   time: \t%.2fms%n%n", (System.nanoTime() - start) / 1000000.0);
                 continue;
             }
@@ -218,7 +219,6 @@ public class TestRunner
             processOutputFiles(test, testFolder, false);
 
             // blame human for being SgTrUePaItD
-            System.out.println("===== TEST " + test.name + " =====");
 
             boolean isCorrect = true;
             isCorrect &= checkExitCode(test, process.exitValue());
