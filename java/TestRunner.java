@@ -313,14 +313,14 @@ public class TestRunner
 
             if (exitCode != processExitCode)
             {
-                System.out.println("Result exit code: " + exitCode);
-                System.out.println("Expected exit code: " + processExitCode);
+                System.out.printf("Result exit code: %d%nExpected exit code: %d%n%n", exitCode, processExitCode);
                 return false;
             }
         }
         else if (processExitCode != 0)
         {
             System.out.println("Nonzero exit code: " + processExitCode);
+            System.out.println();
             return false;
         }
         return true;
@@ -391,7 +391,7 @@ public class TestRunner
         }
         else if (processBuffer.length > 0)
         {
-            System.out.printf("Result %s should be empty:%n%s%n",
+            System.out.printf("Result %s should be empty:%n%s%n%n",
                 streamName,
                 new String(processBuffer).substring(0, Math.min(1000, result.length())));
             return false;
