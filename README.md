@@ -67,8 +67,10 @@ Result out should be empty:   <-------------------------- if your program produc
     OR
 Result out:   <------------------------------------------ if your program's standard output does not byte match given test data
 [your program's standard output truncated to 1000 characters or `<empty>`] (invisible ASCII characters are escaped)
+    +
 Expected out:
 [content of `name.out` truncated to 1000 characters] (invisible ASCII characters are escaped)
+    +
 Mismatch <in only character|after end|at start|at end|at [byte index]> of result out:
 [mismatch detail if applicable]   <---------------------- `...` means a lot data around, `|` means start/end of data, `<> [character] <>` highlights where first byte mismatch appears, each part of data is surrounded with single space
     OR nothing if output is correct
