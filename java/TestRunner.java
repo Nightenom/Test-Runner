@@ -123,7 +123,7 @@ public class TestRunner
                 if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
                 {
                     processGen.destroy();
-                    System.out.println("Input generation timeout for: " + test.name);
+                    System.out.println("Input generation timeout, skipping...");
                     System.out.println();
                     continue;
                 }
@@ -162,7 +162,7 @@ public class TestRunner
                 if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
                 {
                     processGen.destroy();
-                    System.out.println("Reference solution generation timeout for: " + test.name);
+                    System.out.println("Reference solution generation timeout, skipping...");
                     System.out.println();
                     continue;
                 }
