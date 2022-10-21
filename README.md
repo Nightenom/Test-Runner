@@ -4,6 +4,9 @@ A dumb homework testing framework for any amazing thingy with huge test suite
 
 ## Description
 
+This single file program is here to run your program under various environment changes, mainly for supplying various stdin/stdout/stderr tests.
+You can choose among multiple implementations, but all should behave in the same way. The reason for many implementations is (future) posibility to inject given program into Test Runner process for faster execution (and eventually more precise timing).
+
 For a successful execution you need to provide two arguments:
 - a path to directory with test cases (test directory)
 - a base command which can be executed in your OS's CLI
@@ -34,11 +37,12 @@ For each file `name.ext` in the test directory create or adjust data for test ca
 | **Planned extensions** | | |
 | `desc` | description | Content of whole file is printed after test header |
 | `prerun` and `postrun` | pre and post run tasks | Same format as `gen` tasks, run before/after your program. Eg. for compiling etc. |
+| `envmap` | console environment | Per line mapping to change console environment |
 
 ### Description of test output
 
 ```
-===== TEST name =====   <------------ test header
+===== TEST name =====   <-------------------------------- test header
 Running in directory: /bleh/blah   <--------------------- if `rundir` is specified then this is absolute and normalized version of parsed path
 Generating input...   <---------------------------------- if `genin` is specified then input generation has begun
 Input generation timeout, skipping...   <---------------- if `genin` is specified then generating input took longer than allowed, rest of test case is skipped
