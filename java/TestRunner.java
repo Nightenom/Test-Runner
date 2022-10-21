@@ -17,6 +17,8 @@ import java.util.function.BiFunction;
 
 public class TestRunner
 {
+    private static final int DUMP_AROUND_SIZE = 30;
+
     public static void main(final String[] args) throws Exception
     {
         if (System.getProperty("tr.folder") == null)
@@ -207,7 +209,7 @@ public class TestRunner
             if (timeout != -1 && !process.waitFor(timeout, TimeUnit.SECONDS))
             {
                 process.destroy();
-                System.out.printf("TIMEOUT   time: \t%.2fms%n%n", (System.nanoTime() - start) / 1000000.0);
+                System.out.printf("TIMEOUT   time: \t%.2f ms%n%n", (System.nanoTime() - start) / 1000000.0);
                 continue;
             }
             else
@@ -351,26 +353,26 @@ public class TestRunner
 
                 if (firstByteMismatch == 0 && result.length() == 1)
                 {
-                    System.out.printf("Mismatch in only character of %s:%n| %c |%n%n", streamName, result.charAt(0));
+                    System.out.printf("Mismatch in only character of result %s:%n| %c |%n%n", streamName, result.charAt(0));
                 }
                 else if (firstByteMismatch >= result.length())
                 {
-                    System.out.printf("Mismatch after end of %s%n%n", streamName);
+                    System.out.printf("Mismatch after end of result %s%n%n", streamName);
                 }
                 else if (firstByteMismatch == 0)
                 {
                     System.out.printf("Mismatch at start of result %s:%n| %c <> %s %s%n%n",
                         streamName,
                         result.charAt(firstByteMismatch),
-                        result.substring(firstByteMismatch + 1, Math.min(firstByteMismatch + 11, result.length())),
-                        Math.min(firstByteMismatch + 11, result.length()) >= result.length() ? "|" : "...");
+                        result.substring(firstByteMismatch + 1, Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length())),
+                        Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()) >= result.length() ? "|" : "...");
                 }
                 else if (firstByteMismatch == result.length() - 1)
                 {
                     System.out.printf("Mismatch at end of result %s:%n%s %s <> %c |%n%n",
                         streamName,
-                        firstByteMismatch < 11 ? "|" : "...",
-                        result.substring(Math.max(firstByteMismatch - 10, 0), firstByteMismatch),
+                        firstByteMismatch < 1 + DUMP_AROUND_SIZE ? "|" : "...",
+                        result.substring(Math.max(firstByteMismatch - DUMP_AROUND_SIZE, 0), firstByteMismatch),
                         result.charAt(firstByteMismatch));
                 }
                 else
@@ -378,18 +380,20 @@ public class TestRunner
                     System.out.printf("Mismatch at %d of result %s:%n%s %s <> %c <> %s %s%n%n",
                         firstByteMismatch,
                         streamName,
-                        firstByteMismatch < 11 ? "|" : "...",
-                        result.substring(Math.max(firstByteMismatch - 10, 0), firstByteMismatch),
+                        firstByteMismatch < 1 + DUMP_AROUND_SIZE ? "|" : "...",
+                        result.substring(Math.max(firstByteMismatch - DUMP_AROUND_SIZE, 0), firstByteMismatch),
                         result.charAt(firstByteMismatch),
-                        result.substring(firstByteMismatch + 1, Math.min(firstByteMismatch + 11, result.length())),
-                        Math.min(firstByteMismatch + 11, result.length()) >= result.length() ? "|" : "...");
+                        result.substring(firstByteMismatch + 1, Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length())),
+                        Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()) >= result.length() ? "|" : "...");
                 }
                 return false;
             }
         }
         else if (processBuffer.length > 0)
         {
-            System.out.printf("Result %s should be empty:%n%s%n", streamName, new String(processBuffer));
+            System.out.printf("Result %s should be empty:%n%s%n",
+                streamName,
+                new String(processBuffer).substring(0, Math.min(1000, result.length())));
             return false;
         }
         return true;
