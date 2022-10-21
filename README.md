@@ -35,6 +35,43 @@ For each file `name.ext` in the test directory create or adjust data for test ca
 | `desc` | description | Content of whole file is printed after test header |
 | `prerun` and `postrun` | pre and post run tasks | Same format as `gen` tasks, run before/after your program. Eg. for compiling etc. |
 
+### Description of test output
+
+```
+===== TEST name =====   <------------ test header
+Running in directory: /bleh/blah   <--------------------- if `rundir` is specified then this is absolute and normalized version of parsed path
+Generating input...   <---------------------------------- if `genin` is specified then input generation has begun
+Input generation timeout, skipping...   <---------------- if `genin` is specified then generating input took longer than allowed, rest of test case is skipped
+                                                     ^--- else `name.in` is overwritten
+
+Generating reference solution...   <--------------------- if `gen` is specified then output generation has begun
+Reference solution generation timeout, skipping...   <--- if `gen` is specified then generating output took longer than allowed, rest of test case is skipped
+                                                     ^--- else `name.out` and `name.err` are overwritten
+
+                                                     ˇ--- execution of your program has begun
+TIMEOUT   time:    1541651 ms   <------------------------ your program's execution took longer than allowed, rest of test case is skipped
+
+Result exit code: 12   <--------------------------------- your program's exit code
+Expected exit code: 45   <------------------------------- expected exit code from `name.exit`
+    OR
+Nonzero exit code: 12   <-------------------------------- if `name.exit` doesn't exist and your program returned non-zero exit code
+    OR nothing if exit code is correct
+  
+                                                     ˇ--- following part may appear two times - one for stdout and one for stderr
+Result out should be empty:   <-------------------------- if your program produced anything on standard output but should not
+[your program's standard output truncated to 1000 characters] (invisible ASCII characters are escaped - eg. `\r\n`, or printed as hexcode - eg. `\0x01`
+    OR
+Result out:   <------------------------------------------ if your program's standard output does not byte match given test data
+[your program's standard output truncated to 1000 characters or `<empty>`] (invisible ASCII characters are escaped)
+Expected out:
+[content of `name.out` truncated to 1000 characters] (invisible ASCII characters are escaped)
+Mismatch <in only character|after end|at start|at end|at [byte index]> of result out:
+[mismatch detail if applicable]   <---------------------- `...` means a lot data around, `|` means start/end of data, `<> [character] <>` highlights where first byte mismatch appears, each part of data is surrounded with single space
+    OR nothing if output is correct
+
+TODO: output files info description
+```
+
 ## Contributing
 
 Any PRs are welcome as long as they:
