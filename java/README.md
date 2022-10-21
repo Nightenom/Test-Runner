@@ -11,3 +11,5 @@ Currently, arguments are passed using properties (eg. `-Dtr.folder=test`), list 
 ## TODOs
 1. Parse base command in better way?
 2. Hexdump in case of mismatch in output files
+3. Special property flag to run Java directly in Test Runner using inject
+4. Allow environment values in addition to property arguments
