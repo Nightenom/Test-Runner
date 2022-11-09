@@ -200,6 +200,7 @@ public class TestRunner
             }
 
             // execute "main"
+            boolean timeouted = false;
             final long start = System.nanoTime();
             final Process process = pb.start();
             if (!test.hasInput())
@@ -209,8 +210,7 @@ public class TestRunner
             if (timeout != -1 && !process.waitFor(timeout, TimeUnit.SECONDS))
             {
                 process.destroy();
-                System.out.printf("TIMEOUT   time: \t%.2f ms%n%n", (System.nanoTime() - start) / 1000000.0);
-                continue;
+                timeouted = true;
             }
             else
             {
@@ -227,9 +227,11 @@ public class TestRunner
             isCorrect &= checkStream(test.output, process.getInputStream(), "out");
             isCorrect &= checkStream(test.error, process.getErrorStream(), "err");
             isCorrect &= checkOutputFiles(test, testFolder);
-            correctTests += isCorrect ? 1 : 0;
+            correctTests += !timeouted && isCorrect ? 1 : 0;
 
-            System.out.printf("%s     time: \t%.2fms%n%n", isCorrect ? "OK   " : "ERROR", (end - start) / 1000000.0);
+            System.out.printf("%s   time: \t%.2fms%n%n",
+                timeouted ? "TIMEOUT" : (isCorrect ? "OK     " : "ERROR  "),
+                (end - start) / 1000000.0);
         }
 
         System.out.println("CORRECT: " + correctTests + "/" + testInfos.size());
@@ -391,9 +393,8 @@ public class TestRunner
         }
         else if (processBuffer.length > 0)
         {
-            System.out.printf("Result %s should be empty:%n%s%n%n",
-                streamName,
-                new String(processBuffer).substring(0, Math.min(1000, result.length())));
+            final String result = new String(processBuffer);
+            System.out.printf("Result %s should be empty:%n%s%n%n", streamName, result.substring(0, Math.min(1000, result.length())));
             return false;
         }
         return true;
