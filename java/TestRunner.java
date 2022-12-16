@@ -13,11 +13,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 public class TestRunner
 {
     private static final int DUMP_AROUND_SIZE = 30;
+    private static final AtomicReference<Process> runningProcess = new AtomicReference<>();
 
     public static void main(final String[] args) throws Exception
     {
@@ -95,6 +97,9 @@ public class TestRunner
         catch (IOException e)
         {}
 
+        Runtime.getRuntime()
+            .addShutdownHook(new Thread(() -> Optional.ofNullable(runningProcess.getAndSet(null)).ifPresent(Process::destroy)));
+
         for (TestInfo test : testInfos.values().stream().sorted(Comparator.comparing(TestInfo::name)).toList())
         {
             System.out.println("===== TEST " + test.name + " =====");
@@ -122,9 +127,11 @@ public class TestRunner
                 }
 
                 final Process processGen = pbGen.start();
+                runningProcess.set(processGen);
                 if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
                 {
                     processGen.destroy();
+                    runningProcess.set(null);
                     System.out.println("Input generation timeout, skipping...");
                     System.out.println();
                     continue;
@@ -132,6 +139,7 @@ public class TestRunner
                 else
                 {
                     processGen.waitFor();
+                    runningProcess.set(null);
                 }
 
                 test = test.attachInput(genIn);
@@ -157,6 +165,7 @@ public class TestRunner
                 }
 
                 final Process processGen = pbGen.start();
+                runningProcess.set(processGen);
                 if (!test.hasInput())
                 {
                     processGen.getOutputStream().close();
@@ -164,6 +173,8 @@ public class TestRunner
                 if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
                 {
                     processGen.destroy();
+                    runningProcess.set(null);
+
                     System.out.println("Reference solution generation timeout, skipping...");
                     System.out.println();
                     continue;
@@ -171,6 +182,7 @@ public class TestRunner
                 else
                 {
                     processGen.waitFor();
+                    runningProcess.set(null);
                 }
 
                 processOutputFiles(test, testFolder, true);
@@ -203,6 +215,7 @@ public class TestRunner
             boolean timeouted = false;
             final long start = System.nanoTime();
             final Process process = pb.start();
+            runningProcess.set(process);
             if (!test.hasInput())
             {
                 process.getOutputStream().close();
@@ -216,6 +229,7 @@ public class TestRunner
             {
                 process.waitFor();
             }
+            runningProcess.set(null);
             final long end = System.nanoTime();
 
             processOutputFiles(test, testFolder, false);
