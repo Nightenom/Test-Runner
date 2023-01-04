@@ -89,6 +89,7 @@ public class TestRunner
         final int mainTimeout = Optional.ofNullable(System.getProperty("tr.main_timeout")).map(Integer::valueOf).orElse(10);
 
         int correctTests = 0;
+        long accumulatedTime = 0;
 
         try
         {
@@ -245,10 +246,12 @@ public class TestRunner
 
             System.out.printf("%s   time: \t%.2fms%n%n",
                 timeouted ? "TIMEOUT" : (isCorrect ? "OK     " : "ERROR  "),
-                (end - start) / 1000000.0);
+                (end - start) / 1000000.0d);
+
+            accumulatedTime += (end - start);
         }
 
-        System.out.println("CORRECT: " + correctTests + "/" + testInfos.size());
+        System.out.printf("CORRECT: %d/%d\n\t   time: \t%.2fms\n", correctTests, testInfos.size(), accumulatedTime / 1000000.0d);
         if (correctTests == testInfos.size())
         {
             System.out.println();
