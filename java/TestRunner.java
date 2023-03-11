@@ -1,9 +1,9 @@
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -14,54 +14,76 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
+import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
+import static java.util.function.Predicate.not;
 
 public class TestRunner
 {
     private static final int DUMP_AROUND_SIZE = 30;
+
+    // runtime
     private static final AtomicReference<Process> runningProcess = new AtomicReference<>();
+    private static int mainTimeout = 10;
 
     public static void main(final String[] args) throws Exception
     {
-        if (System.getProperty("tr.folder") == null)
-        {
-            throw new IllegalArgumentException("missing -Dtr.folder pointing to .in/out/err/... files");
-        }
+        final Path testFolder;
+        final String[] mainBase;
 
-        if (System.getProperty("tr.main") == null)
         {
-            throw new IllegalArgumentException("missing -Dtr.main in format 'path_to_executable arguments'");
-        }
+            boolean errored = false;
+            final String folderProperty = System.getProperty("tr.folder");
+            final String mainProperty = System.getProperty("tr.main");
+            final String fileExtensionProperty = System.getProperty("tr.file_exts");
+            final String timeoutProperty = System.getProperty("tr.main_timeout");
 
-        final Path testFolder = Path.of(System.getProperty("tr.folder")).toAbsolutePath().normalize();
-        if (!Files.isDirectory(testFolder))
-        {
-            throw new IllegalArgumentException("non-directory path in -Dtr.folder");
-        }
+            try
+            {
+                mainTimeout = Integer.parseInt(timeoutProperty);
+            }
+            catch (NumberFormatException e)
+            {
+                System.err.println("unparsable timeout: " + e.getMessage());
+                errored = true;
+            }
 
-        final String[] testFileExtensions = Optional.ofNullable(System.getProperty("tr.file_exts"))
-            .orElse("in,out,err,args,exit,genin,gen,timeout,rundir,outfiles")
-            .toLowerCase()
-            .split(",");
-        if (testFileExtensions.length != 10)
-        {
-            throw new IllegalArgumentException(
-                "expected xxx,xxx,xxx,xxx,xxx,xxx,xxx,xxx,xxx,xxx (input/output/error/arguments/exit code/generate/reference solution/timeout/run directory/output files) for -Dtr.file_exts but got list with length: " +
-                    testFileExtensions.length);
+            if (mainProperty == null)
+            {
+                System.err.println("missing -Dtr.main in format 'path_to_executable arguments'");
+                errored = true;
+                mainBase = null;
+            }
+            else
+            {
+                mainBase = mainProperty.split(" "); // arguments splitting? not so easy
+            }
+
+            if (fileExtensionProperty != null && FileExtension.changeExtensions(fileExtensionProperty.split(",")))
+            {
+                errored = true;
+            }
+
+            if (folderProperty == null)
+            {
+                System.err.println("missing -Dtr.folder pointing to .in/out/err/... files");
+                errored = true;
+            }
+
+            testFolder = Path.of(folderProperty).toAbsolutePath().normalize();
+            if (!Files.isDirectory(testFolder))
+            {
+                System.err.println("non-directory path in -Dtr.folder");
+                errored = true;
+            }
+
+            if (errored)
+            {
+                throw new IllegalArgumentException("Failed to setup: see above for further informantion");
+            }
         }
 
         final Map<String, TestInfo> testInfos = new HashMap<>();
-        final Map<String, BiFunction<TestInfo, Path, TestInfo>> testInfoSetups = new HashMap<>(3);
-        testInfoSetups.put(testFileExtensions[0], TestInfo::attachInput);
-        testInfoSetups.put(testFileExtensions[1], TestInfo::attachOutput);
-        testInfoSetups.put(testFileExtensions[2], TestInfo::attachError);
-        testInfoSetups.put(testFileExtensions[3], TestInfo::attachArguments);
-        testInfoSetups.put(testFileExtensions[4], TestInfo::attachExitCode);
-        testInfoSetups.put(testFileExtensions[5], TestInfo::attachGenerate);
-        testInfoSetups.put(testFileExtensions[6], TestInfo::attachRefSolution);
-        testInfoSetups.put(testFileExtensions[7], TestInfo::attachTimeout);
-        testInfoSetups.put(testFileExtensions[8], TestInfo::attachRunDir);
-        testInfoSetups.put(testFileExtensions[9], TestInfo::attachOutputFiles);
 
         try (var it = Files.newDirectoryStream(testFolder))
         {
@@ -74,19 +96,15 @@ public class TestRunner
                     continue;
                 }
 
-                final var testInfoUpdater = testInfoSetups.get(fileNameWithExt.substring(lastPeriod + 1).toLowerCase());
-                if (testInfoUpdater != null)
+                final var fileExtension = FileExtension.get(fileNameWithExt.substring(lastPeriod + 1));
+                if (fileExtension != null)
                 {
                     final String fileName = fileNameWithExt.substring(0, lastPeriod);
-                    testInfos.computeIfAbsent(fileName, TestInfo::ofName); // Map#merge value is not supplier
-                    testInfos.computeIfPresent(fileName,
-                        (key, old) -> testInfoUpdater.apply(old, testPath.toAbsolutePath().normalize()));
+                    fileExtension.extensionProcessor.accept(testInfos.computeIfAbsent(fileName, TestInfo::ofName),
+                        testPath.toAbsolutePath().normalize());
                 }
             }
         }
-
-        final String[] mainBase = System.getProperty("tr.main").split(" "); // arguments splitting? not so easy
-        final int mainTimeout = Optional.ofNullable(System.getProperty("tr.main_timeout")).map(Integer::valueOf).orElse(10);
 
         int correctTests = 0;
         long accumulatedTime = 0;
@@ -95,145 +113,70 @@ public class TestRunner
         {
             new ProcessBuilder("echo").start().waitFor(); // warmup process builder
         }
-        catch (IOException e)
+        catch (final IOException e)
         {}
 
         Runtime.getRuntime()
             .addShutdownHook(new Thread(() -> Optional.ofNullable(runningProcess.getAndSet(null)).ifPresent(Process::destroy)));
 
-        for (TestInfo test : testInfos.values().stream().sorted(Comparator.comparing(TestInfo::name)).toList())
+        for (final TestInfo test : testInfos.values().stream().sorted(Comparator.comparing(t -> t.name)).toList())
         {
             System.out.println("===== TEST " + test.name + " =====");
 
-            final int timeout = test.hasTimeout() ? Integer.valueOf(Files.readString(test.timeout)) : mainTimeout;
+            test.printDescription(System.out);
+            System.out.println();
 
-            // transform run directory
-            if (test.hasRunDirectory())
+            if (test.prepare(testFolder))
             {
-                test = test.attachRunDir(Path.of(Files.readAllLines(test.runDir).get(0)).toAbsolutePath().normalize());
-                System.out.println("Running in directory: " + test.runDir.toString());
+                System.out.println();
+                continue;
             }
+            System.out.println();
 
             // Generate input
             if (test.hasGenerate())
             {
                 System.out.println("Generating input...");
-                final Path genIn = test.generate.getParent().resolve(test.name + "." + testFileExtensions[0]);
 
-                final ProcessBuilder pbGen = new ProcessBuilder(Files.readAllLines(test.generate));
-                pbGen.redirectOutput(genIn.toFile());
-                if (test.hasRunDirectory())
+                if (test.runProcess(test.prepareGenerateInput(testFolder).start()))
                 {
-                    pbGen.directory(test.runDir.toFile());
-                }
-
-                final Process processGen = pbGen.start();
-                runningProcess.set(processGen);
-                if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
-                {
-                    processGen.destroy();
-                    runningProcess.set(null);
                     System.out.println("Input generation timeout, skipping...");
                     System.out.println();
                     continue;
                 }
-                else
-                {
-                    processGen.waitFor();
-                    runningProcess.set(null);
-                }
-
-                test = test.attachInput(genIn);
             }
 
             // Generate output and error
             if (test.hasRefSolution())
             {
                 System.out.println("Generating reference solution...");
-                final Path genOut = test.refsolution.getParent().resolve(test.name + "." + testFileExtensions[1]);
-                final Path genErr = test.refsolution.getParent().resolve(test.name + "." + testFileExtensions[2]);
 
-                final ProcessBuilder pbGen = new ProcessBuilder(Files.readAllLines(test.refsolution));
-                if (test.hasInput())
-                {
-                    pbGen.redirectInput(test.input.toFile());
-                }
-                pbGen.redirectOutput(genOut.toFile());
-                pbGen.redirectError(genErr.toFile());
-                if (test.hasRunDirectory())
-                {
-                    pbGen.directory(test.runDir.toFile());
-                }
-
-                final Process processGen = pbGen.start();
-                runningProcess.set(processGen);
+                final Process processGen = test.prepareGenerateOutput(testFolder).start();
                 if (!test.hasInput())
                 {
                     processGen.getOutputStream().close();
                 }
-                if (timeout != -1 && !processGen.waitFor(timeout, TimeUnit.SECONDS))
+                if (test.runProcess(processGen))
                 {
-                    processGen.destroy();
-                    runningProcess.set(null);
-
                     System.out.println("Reference solution generation timeout, skipping...");
                     System.out.println();
                     continue;
                 }
-                else
-                {
-                    processGen.waitFor();
-                    runningProcess.set(null);
-                }
-
-                processOutputFiles(test, testFolder, true);
-
-                test = test.attachOutput(genOut);
-                test = test.attachError(genErr);
-            }
-
-            // prepare "main" execution
-            final ProcessBuilder pb = new ProcessBuilder();
-
-            if (test.hasInput())
-            {
-                pb.redirectInput(test.input.toFile());
-            }
-
-            final List<String> mainArgs = new ArrayList<>(Arrays.asList(mainBase));
-            if (test.hasArguments())
-            {
-                mainArgs.addAll(Files.readAllLines(test.args));
-            }
-            pb.command(mainArgs);
-
-            if (test.hasRunDirectory())
-            {
-                pb.directory(test.runDir.toFile());
             }
 
             // execute "main"
             boolean timeouted = false;
             final long start = System.nanoTime();
-            final Process process = pb.start();
-            runningProcess.set(process);
+            final Process process = test.prepareMain(testFolder, mainBase).start();
             if (!test.hasInput())
             {
                 process.getOutputStream().close();
             }
-            if (timeout != -1 && !process.waitFor(timeout, TimeUnit.SECONDS))
+            if (test.runProcess(process))
             {
-                process.destroy();
                 timeouted = true;
             }
-            else
-            {
-                process.waitFor();
-            }
-            runningProcess.set(null);
             final long end = System.nanoTime();
-
-            processOutputFiles(test, testFolder, false);
 
             // blame human for being SgTrUePaItD
 
@@ -260,24 +203,6 @@ public class TestRunner
         }
     }
 
-    private static void processOutputFiles(final TestInfo test, final Path testFolder, final boolean isReference) throws IOException
-    {
-        if (!test.hasOutputFiles())
-        {
-            return;
-        }
-
-        for (final String outputFile : Files.readAllLines(test.outputFiles))
-        {
-            final Path programResult = (test.hasRunDirectory() ? test.runDir : Paths.get(".")).resolve(outputFile);
-            if (Files.exists(programResult))
-            {
-                final Path moveTo = testFolder.resolve(test.name + ".outf_" + (isReference ? "ref." : "user.") + outputFile);
-                Files.move(programResult, moveTo, StandardCopyOption.REPLACE_EXISTING);
-            }
-        }
-    }
-
     private static boolean checkOutputFiles(final TestInfo test, final Path testFolder) throws IOException
     {
         if (!test.hasOutputFiles())
@@ -287,10 +212,10 @@ public class TestRunner
 
         boolean isCorrect = true;
 
-        for (final String outputFile : Files.readAllLines(test.outputFiles))
+        for (final String outputFile : Files.readAllLines(test.outputFilesPath))
         {
-            final Path user = testFolder.resolve(test.name + ".outf_user." + outputFile).toAbsolutePath().normalize();
-            final Path reference = testFolder.resolve(test.name + ".outf_ref." + outputFile).toAbsolutePath().normalize();
+            final Path user = testFolder.resolve(test.name + "." + outputFile).toAbsolutePath().normalize();
+            final Path reference = testFolder.resolve(outputFile).toAbsolutePath().normalize();
             if (!Files.exists(user))
             {
                 System.out.println("Missing user output file of name: \"" + outputFile + "\" at: " + user.toString());
@@ -420,7 +345,7 @@ public class TestRunner
     private static String escapeInvisibles(final String escape)
     {
         final int len = escape.length();
-        final StringBuilder sb = new StringBuilder(1005 * len / 1000);
+        final StringBuilder sb = new StringBuilder(Math.max(1005 * len / 1000, len));
         for (int i = 0; i < len; i++)
         {
             final char c = escape.charAt(i);
@@ -467,72 +392,317 @@ public class TestRunner
         return sb.toString();
     }
 
-    private static record TestInfo(String name,
-        Path input,
-        Path output,
-        Path error,
-        Path args,
-        Path exitCode,
-        Path generate,
-        Path refsolution,
-        Path timeout,
-        Path runDir,
-        Path outputFiles)
+    private static class TestInfo
     {
+        // config
+        final String name;
+        Path input;
+        Path output;
+        Path error;
+        Path args;
+        Path exitCode;
+        Path generate;
+        Path refsolution;
+        Path timeout;
+        Path runDir;
+        Path inputFilesPath;
+        Path outputFilesPath;
+        Path environmentMap;
+        Path description;
+
+        // runtime
+        int timeoutSeconds;
+        Map<String, String> environment = new HashMap<>();
+        List<String> inFiles;
+        List<String> outFiles;
+
+        public TestInfo(final String name)
+        {
+            this.name = name;
+        }
+
         private static TestInfo ofName(final String name)
         {
             Objects.requireNonNull(name);
-            return new TestInfo(name, null, null, null, null, null, null, null, null, null, null);
+            return new TestInfo(name);
         }
 
-        private TestInfo attachInput(final Path input)
+        private void attachInput(final Path input)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.input = input;
         }
 
-        private TestInfo attachOutput(final Path output)
+        private void attachOutput(final Path output)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.output = output;
         }
 
-        private TestInfo attachError(final Path error)
+        private void attachError(final Path error)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.error = error;
         }
 
-        private TestInfo attachArguments(final Path args)
+        private void attachArguments(final Path args)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.args = args;
         }
 
-        private TestInfo attachExitCode(final Path exitCode)
+        private void attachExitCode(final Path exitCode)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.exitCode = exitCode;
         }
 
-        private TestInfo attachGenerate(final Path generate)
+        private void attachGenerate(final Path generate)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.generate = generate;
         }
 
-        private TestInfo attachRefSolution(final Path refsolution)
+        private void attachRefSolution(final Path refsolution)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.refsolution = refsolution;
         }
 
-        private TestInfo attachTimeout(final Path timeout)
+        private void attachTimeout(final Path timeout)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.timeout = timeout;
         }
 
-        private TestInfo attachRunDir(final Path runDir)
+        private void attachRunDir(final Path runDir)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.runDir = runDir;
         }
 
-        private TestInfo attachOutputFiles(final Path outputFiles)
+        private void attachInputFiles(final Path inputFiles)
         {
-            return new TestInfo(name, input, output, error, args, exitCode, generate, refsolution, timeout, runDir, outputFiles);
+            this.inputFilesPath = inputFiles;
+        }
+
+        private void attachOutputFiles(final Path outputFiles)
+        {
+            this.outputFilesPath = outputFiles;
+        }
+
+        private void attachEnvironmentMap(final Path environmentMap)
+        {
+            this.environmentMap = environmentMap;
+        }
+
+        private void attachDescription(final Path description)
+        {
+            this.description = description;
+        }
+
+        private void printDescription(final PrintStream out) throws Exception
+        {
+            if (description != null)
+            {
+                Files.readAllLines(description).forEach(out::println);
+            }
+        }
+
+        private boolean prepare(final Path testFolder) throws Exception
+        {
+            timeoutSeconds = timeout != null ? Integer.valueOf(Files.readString(timeout)) : mainTimeout;
+
+            if (runDir != null)
+            {
+                // transform run directory
+                runDir = Path.of(Files.readAllLines(runDir).get(0)).toAbsolutePath().normalize();
+                System.out.println("Running in directory: " + runDir.toString());
+            }
+            else
+            {
+                // set to current dir
+                runDir = Paths.get(".");
+            }
+
+            if (environmentMap != null)
+            {
+                final List<String> envMap = Files.readAllLines(environmentMap);
+
+                System.out.println("Running with additional environment variables: ");
+                for (int i = 0; i < envMap.size(); i += 2)
+                {
+                    final String key = envMap.get(i);
+                    final String value = expandVariables(envMap.get(i + 1), testFolder);
+
+                    if (key.isBlank())
+                    {
+                        System.out.println("\t Empty key on line: " + i + ", skipping...");
+                        return true;
+                    }
+
+                    environment.put(key, value);
+                    System.out.println("\t" + key + " = " + value);
+                }
+            }
+
+            return false;
+        }
+
+        public ProcessBuilder prepareGenerateInput(final Path testFolder) throws Exception
+        {
+            final Path genIn = testFolder.resolve(name + "." + FileExtension.STDIN);
+
+            final ProcessBuilder pb = new ProcessBuilder(expandVariables(Files.readAllLines(generate), testFolder));
+
+            pb.redirectOutput(genIn.toFile());
+            pb.directory(testFolder.toFile());
+            pb.environment().putAll(environment);
+
+            input = genIn;
+
+            return pb;
+        }
+
+        public ProcessBuilder prepareGenerateOutput(final Path testFolder) throws Exception
+        {
+            final Path genOut = testFolder.resolve(name + "." + FileExtension.STDOUT);
+            final Path genErr = testFolder.resolve(name + "." + FileExtension.STDERR);
+
+            final ProcessBuilder pb = new ProcessBuilder(expandVariables(Files.readAllLines(refsolution), testFolder));
+            if (input != null)
+            {
+                pb.redirectInput(input.toFile());
+            }
+            pb.redirectOutput(genOut.toFile());
+            pb.redirectError(genErr.toFile());
+            pb.directory(testFolder.toFile());
+            pb.environment().putAll(environment);
+
+            output = genOut;
+            error = genErr;
+
+            return pb;
+        }
+
+        public ProcessBuilder prepareMain(final Path testFolder, final String[] mainBase) throws Exception
+        {
+            final List<String> mainArgs = new ArrayList<>(Arrays.asList(mainBase));
+            if (hasArguments())
+            {
+                mainArgs.addAll(Files.readAllLines(args));
+            }
+
+            final ProcessBuilder pb = new ProcessBuilder(expandVariables(mainArgs, testFolder));
+            if (input != null)
+            {
+                pb.redirectInput(input.toFile());
+            }
+            pb.directory(runDir.toFile());
+            pb.environment().putAll(environment);
+
+            return pb;
+        }
+
+        public boolean runProcess(final Process process) throws Exception
+        {
+            runningProcess.set(process);
+            if (timeoutSeconds != -1 && !process.waitFor(timeoutSeconds, TimeUnit.SECONDS))
+            {
+                process.destroy();
+                runningProcess.set(null);
+                return true;
+            }
+            else
+            {
+                process.waitFor();
+                runningProcess.set(null);
+            }
+            return false;
+        }
+
+        private List<String> expandVariables(final List<String> args, final Path testFolder) throws Exception
+        {
+            for (int i = 0; i < args.size(); i++)
+            {
+                args.set(i, expandVariables(args.get(i), testFolder));
+            }
+            return args;
+        }
+
+        private String expandVariables(String str, Path testFolder) throws Exception
+        {
+            if (inFiles == null && inputFilesPath != null)
+            {
+                inFiles = Files.readAllLines(inputFilesPath)
+                    .stream()
+                    .filter(not(String::isBlank))
+                    .map(f -> testFolder.resolve(f))
+                    .map(Object::toString)
+                    .toList();
+            }
+            else
+            {
+                inFiles = List.of();
+            }
+            if (outFiles == null && outputFilesPath != null)
+            {
+                outFiles = Files.readAllLines(outputFilesPath)
+                    .stream()
+                    .filter(not(String::isBlank))
+                    .filter(s -> !s.startsWith("//"))
+                    .map(f -> testFolder.resolve(f))
+                    .map(Object::toString)
+                    .toList();
+            }
+            else
+            {
+                outFiles = List.of();
+            }
+
+            final String strOld = str;
+            str = str.replace("$$TEST_FOLDER$$", testFolder.toString());
+            str = str.replace("$$RUN_DIRECTORY$$", runDir.toString());
+
+            if (inFiles.isEmpty() && outFiles.isEmpty())
+            {
+                System.err.println("DEBUG: " + strOld + " $$ " + str);
+                return str;
+            }
+
+            int index = 0;
+            while (index < str.length())
+            {
+                final int locIn = inFiles.isEmpty() ? -1 : str.indexOf("$$INPUT_FILES_", index);
+                final int locOut = outFiles.isEmpty() ? -1 : str.indexOf("$$OUTPUT_FILES_", index);
+
+                if (locIn == -1 && locOut == -1) // found nothing -> end
+                {
+                    break;
+                }
+
+                final int loc = locIn == -1 ? locOut : (locOut == -1 ? locIn : Math.min(locIn, locOut));
+                final List<String> files = loc == locIn ? inFiles : outFiles;
+                final int locArg = loc + (loc == locIn ? "$$INPUT_FILES_".length() : "$$OUTPUT_FILES_".length());
+
+                int locEnd = str.indexOf("$$", locArg);
+                if (locEnd == -1)
+                {
+                    break;
+                }
+
+                index = locEnd + 2;
+                String arg = str.substring(locArg, locEnd);
+
+                try
+                {
+                    arg = files.get(Integer.parseInt(arg));
+                }
+                catch (NumberFormatException e)
+                {
+                    if (arg.length() > 5)
+                    {
+                        System.err.println("WARNING: probably wrong delimiter for files? file argument: " + str.substring(loc, index));
+                    }
+                    arg = String.join(arg, files);
+                }
+
+                str = str.substring(0, loc) + arg + str.substring(index);
+            }
+
+            System.err.println("DEBUG: " + strOld + " $$ " + str);
+            return str;
         }
 
         private boolean hasInput()
@@ -560,19 +730,68 @@ public class TestRunner
             return refsolution != null;
         }
 
-        private boolean hasTimeout()
-        {
-            return timeout != null;
-        }
-
-        private boolean hasRunDirectory()
-        {
-            return runDir != null;
-        }
-
         private boolean hasOutputFiles()
         {
-            return outputFiles != null;
+            return outputFilesPath != null;
+        }
+    }
+
+    public static class FileExtension
+    {
+        String extension;
+        String description;
+        BiConsumer<TestInfo, Path> extensionProcessor;
+
+        public static FileExtension STDIN = new FileExtension("in", "stdin", TestInfo::attachInput);
+        public static FileExtension STDOUT = new FileExtension("out", "stdout", TestInfo::attachOutput);
+        public static FileExtension STDERR = new FileExtension("err", "stderr", TestInfo::attachError);
+        public static FileExtension ARGS = new FileExtension("args", "arguments", TestInfo::attachArguments);
+        public static FileExtension EXIT_CODE = new FileExtension("exit", "exit code", TestInfo::attachExitCode);
+        public static FileExtension INPUT_GEN = new FileExtension("genin", "stdin generator", TestInfo::attachGenerate);
+        public static FileExtension OUTPUT_GEN = new FileExtension("gen", "reference solver", TestInfo::attachRefSolution);
+        public static FileExtension TIMEOUT = new FileExtension("timeout", "timeout", TestInfo::attachTimeout);
+        public static FileExtension RUN_DIRECTORY = new FileExtension("rundir", "run directory", TestInfo::attachRunDir);
+        public static FileExtension IN_FILES = new FileExtension("infiles", "input files", TestInfo::attachInputFiles);
+        public static FileExtension OUT_FILES = new FileExtension("outfiles", "output files", TestInfo::attachOutputFiles);
+        public static FileExtension ENVIRONMENT_MAP = new FileExtension("envmap", "environment", TestInfo::attachEnvironmentMap);
+        public static FileExtension DESCRIPTION = new FileExtension("desc", "description", TestInfo::attachDescription);
+
+        private static final Map<String, FileExtension> fileExtensionsByExt = new HashMap<>();
+        private static final List<FileExtension> fileExtensionsById = new ArrayList<>();
+
+        public FileExtension(final String extension, final String description, final BiConsumer<TestInfo, Path> extensionProcessor)
+        {
+            fileExtensionsByExt.put(extension, this);
+            fileExtensionsById.add(this);
+        }
+
+        public static boolean changeExtensions(final String[] extensions)
+        {
+            if (extensions.length != fileExtensionsById.size())
+            {
+                System.err.printf("expected %d parts (%s) for -Dtr.file_exts but got list with length: %d%n",
+                    fileExtensionsById.size(),
+                    fileExtensionsById.stream().map(ext -> ext.description).collect(Collectors.joining("/")),
+                    extensions.length);
+                return true;
+            }
+
+            for (int i = 0; i < extensions.length; i++)
+            {
+                fileExtensionsById.get(i).extension = extensions[i];
+            }
+            return false;
+        }
+
+        public static FileExtension get(final String extension)
+        {
+            return fileExtensionsByExt.get(extension);
+        }
+
+        @Override
+        public String toString()
+        {
+            return extension;
         }
     }
 }
