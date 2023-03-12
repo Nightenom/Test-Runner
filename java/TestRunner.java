@@ -219,8 +219,9 @@ public class TestRunner
 
             // execute "main"
             boolean timeouted = false;
+            final ProcessBuilder pb = test.prepareMain(testFolder, mainBase);
             final long start = System.nanoTime();
-            final Process process = test.prepareMain(testFolder, mainBase).start();
+            final Process process = pb.start();
             if (!test.hasInput())
             {
                 process.getOutputStream().close();
