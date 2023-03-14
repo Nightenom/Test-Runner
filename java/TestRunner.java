@@ -1,10 +1,12 @@
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -22,11 +24,11 @@ import static java.util.function.Predicate.not;
 public class TestRunner
 {
     private static final int DUMP_AROUND_SIZE = 30;
-    private static final boolean DEBUG = false;
 
     // runtime
     private static final AtomicReference<Process> runningProcess = new AtomicReference<>();
     private static int mainTimeout = 10;
+    private static boolean debug = false;
 
     public static void main(final String[] args) throws Exception
     {
@@ -39,6 +41,19 @@ public class TestRunner
             final String mainProperty = System.getProperty("tr.main");
             final String fileExtensionProperty = System.getProperty("tr.file_exts");
             final String timeoutProperty = System.getProperty("tr.main_timeout");
+            final String debugProperty = System.getProperty("tr.debug");
+
+            if (debugProperty != null)
+            {
+                try
+                {
+                    debug = Boolean.valueOf(debugProperty);
+                }
+                catch (Exception e)
+                {
+                    System.err.println("unparsable debug: " + e.getMessage());
+                }
+            }
 
             if (timeoutProperty != null)
             {
@@ -88,6 +103,13 @@ public class TestRunner
             if (errored)
             {
                 throw new IllegalArgumentException("Failed to setup: see above for further informantion");
+            }
+
+            if (debug)
+            {
+                System.err.println("DEBUG: testFolder: " + testFolder);
+                System.err.println("DEBUG: runDir: " + Paths.get(".").toAbsolutePath().normalize());
+                System.err.println();
             }
         }
 
@@ -267,11 +289,11 @@ public class TestRunner
 
         for (final Path out : test.outFiles)
         {
-            final Path fileName = out.getFileName();
+            final String fileName = out.getFileName().toString();
             final Path user = test.runDir.resolve(fileName).toAbsolutePath().normalize();
             final Path reference = testFolder.resolve(test.name + "." + fileName);
 
-            if (DEBUG)
+            if (debug)
             {
                 System.err.println("DEBUG: comparing: " + user + " <> " + reference);
             }
@@ -295,11 +317,28 @@ public class TestRunner
                 final long firstMismatchByte = Files.mismatch(user, reference);
                 if (firstMismatchByte != -1)
                 {
-                    System.out.println("Your output file with name \"" + fileName +
-                        "\" does not match reference, position of first wrong byte: " +
-                        firstMismatchByte);
-                    // TODO: do hexdump around mismatch position
-                    System.out.println();
+                    System.out.println("Output file \"" + fileName + "\" does not match reference, relative byte lookup:");
+
+                    final long userSize = Files.size(user);
+                    final long referenceSize = Files.size(reference);
+                    final ByteBuffer buffer =
+                        ByteBuffer.allocate((int) Math.min(2 * DUMP_AROUND_SIZE + 1, Math.min(userSize, referenceSize)));
+                    final long position = Math.max(0, firstMismatchByte - DUMP_AROUND_SIZE);
+
+                    try (var fd = Files.newByteChannel(user, StandardOpenOption.READ))
+                    {
+                        fd.position(position).read(buffer);
+                    }
+                    final byte[] userBytes = Arrays.copyOf(buffer.array(), buffer.capacity());
+
+                    buffer.clear();
+                    try (var fd = Files.newByteChannel(reference, StandardOpenOption.READ))
+                    {
+                        fd.position(position).read(buffer);
+                    }
+                    final byte[] referenceBytes = Arrays.copyOf(buffer.array(), buffer.capacity());
+
+                    compareByteSolutions(userBytes, referenceBytes, fileName);
 
                     isCorrect = false;
                 }
@@ -338,52 +377,58 @@ public class TestRunner
         if (solutionPath != null)
         {
             final byte[] solutionBuffer = Files.readAllBytes(solutionPath);
-            final int firstByteMismatch = Arrays.mismatch(processBuffer, solutionBuffer);
-            if (firstByteMismatch != -1)
-            {
-                final String result = new String(processBuffer);
-                System.out.printf("Result %s:%n%s%n",
-                    streamName,
-                    result.length() == 0 ? "<empty>" : escapeInvisibles(result.substring(0, Math.min(1000, result.length()))));
-                System.out.printf("Expected %s:%n%s%n",
-                    streamName,
-                    escapeInvisibles(new String(solutionBuffer).substring(0, Math.min(1000, solutionBuffer.length))));
-
-                if (result.length() == 0)
-                {
-                    System.out.println();
-                    return false;
-                }
-
-                if (firstByteMismatch == 0 && result.length() == 1)
-                {
-                    System.out.printf("Mismatch in only character of result %s:%n| %s |%n%n",
-                        streamName,
-                        escapeInvisibles(result.substring(firstByteMismatch, firstByteMismatch + 1)));
-                }
-                else if (firstByteMismatch >= result.length())
-                {
-                    System.out.printf("Mismatch after end of result %s%n%n", streamName);
-                }
-                else
-                {
-                    System.out.printf("Mismatch at %d of result %s:%n%s %s <> %s <> %s %s%n%n",
-                        firstByteMismatch,
-                        streamName,
-                        firstByteMismatch < 1 + DUMP_AROUND_SIZE ? "|" : "...",
-                        escapeInvisibles(result.substring(Math.max(firstByteMismatch - DUMP_AROUND_SIZE, 0), firstByteMismatch)),
-                        escapeInvisibles(result.substring(firstByteMismatch, firstByteMismatch + 1)),
-                        escapeInvisibles(result.substring(firstByteMismatch + 1,
-                            Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()))),
-                        Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()) >= result.length() ? "|" : "...");
-                }
-                return false;
-            }
+            return compareByteSolutions(processBuffer, solutionBuffer, streamName);
         }
         else if (processBuffer.length > 0)
         {
             final String result = new String(processBuffer);
-            System.out.printf("Result %s should be empty:%n%s%n%n", streamName, result.substring(0, Math.min(1000, result.length())));
+            System.out.printf("Result %s should be empty:%n%s%n", streamName, result.substring(0, Math.min(1000, result.length())));
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean compareByteSolutions(final byte[] processBuffer, final byte[] solutionBuffer, final String name)
+    {
+        final int firstByteMismatch = Arrays.mismatch(processBuffer, solutionBuffer);
+        if (firstByteMismatch != -1)
+        {
+            final String result = new String(processBuffer);
+            System.out.printf("Result %s:%n%s%n",
+                name,
+                result.length() == 0 ? "<empty>" : escapeInvisibles(result.substring(0, Math.min(1000, result.length()))));
+            System.out.printf("Expected %s:%n%s%n",
+                name,
+                escapeInvisibles(new String(solutionBuffer).substring(0, Math.min(1000, solutionBuffer.length))));
+
+            if (result.length() == 0)
+            {
+                System.out.println();
+                return false;
+            }
+
+            if (firstByteMismatch == 0 && result.length() == 1)
+            {
+                System.out.printf("Mismatch in only character of result %s:%n| %s |%n%n",
+                    name,
+                    escapeInvisibles(result.substring(firstByteMismatch, firstByteMismatch + 1)));
+            }
+            else if (firstByteMismatch >= result.length())
+            {
+                System.out.printf("Mismatch after end of result %s%n%n", name);
+            }
+            else
+            {
+                System.out.printf("Mismatch at %d of result %s:%n%s %s <> %s <> %s %s%n%n",
+                    firstByteMismatch,
+                    name,
+                    firstByteMismatch < 1 + DUMP_AROUND_SIZE ? "|" : "...",
+                    escapeInvisibles(result.substring(Math.max(firstByteMismatch - DUMP_AROUND_SIZE, 0), firstByteMismatch)),
+                    escapeInvisibles(result.substring(firstByteMismatch, firstByteMismatch + 1)),
+                    escapeInvisibles(
+                        result.substring(firstByteMismatch + 1, Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()))),
+                    Math.min(firstByteMismatch + 1 + DUMP_AROUND_SIZE, result.length()) >= result.length() ? "|" : "...");
+            }
             return false;
         }
         return true;
@@ -567,10 +612,6 @@ public class TestRunner
             {
                 // set to current dir
                 runDir = Paths.get(".").toAbsolutePath().normalize();
-                if (DEBUG)
-                {
-                    System.out.println("DEBUG: Running in directory: " + runDir.toString());
-                }
             }
 
             if (inputFilesPath != null)
@@ -680,8 +721,14 @@ public class TestRunner
             {
                 mainArgs.addAll(Files.readAllLines(args));
             }
+            expandVariables(mainArgs, testFolder);
 
-            final ProcessBuilder pb = new ProcessBuilder(expandVariables(mainArgs, testFolder));
+            if (debug)
+            {
+                System.err.println("DEBUG: main args: " + mainArgs.toString());
+            }
+
+            final ProcessBuilder pb = new ProcessBuilder(mainArgs);
             if (input != null)
             {
                 pb.redirectInput(input.toFile());
@@ -726,7 +773,7 @@ public class TestRunner
 
             if (inFiles.isEmpty() && outFiles.isEmpty())
             {
-                if (DEBUG && !str.equals(strOld))
+                if (debug && !str.equals(strOld))
                 {
                     System.err.println("DEBUG: expansion: " + strOld + " $$ " + str);
                 }
@@ -773,7 +820,7 @@ public class TestRunner
                 str = str.substring(0, loc) + arg + str.substring(index);
             }
 
-            if (DEBUG && !str.equals(strOld))
+            if (debug && !str.equals(strOld))
             {
                 System.err.println("DEBUG: expansion: " + strOld + " $$ " + str);
             }
