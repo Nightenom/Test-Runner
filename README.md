@@ -1,3 +1,5 @@
+# OUTDATED: not updated to version 2.0 yet
+
 # Test Runner
 
 A dumb homework testing framework for any amazing thingy with huge test suite
