@@ -1,5 +1,3 @@
-# OUTDATED: not updated to version 2.0 yet
-
 # Test Runner
 
 A dumb homework testing framework for any amazing thingy with huge test suite
@@ -12,6 +10,7 @@ You can choose among multiple implementations, but all should behave in the same
 For a successful execution you need to provide two arguments:
 - a path to directory with test cases (test directory)
 - a base command which can be executed in your OS's CLI
+- additionally all configs files (excl. `in` files) are read whole at once (not necessarily parsed whole), you should take this into account regarding memory requirements
 
 ### How does this work
 
@@ -30,18 +29,30 @@ For each file `name.ext` in the test directory create or adjust data for test ca
 | `out` | stdout | Expected standard output of your program. Your program must generate exact byte match. Similar to result of POSIX `executable \| diff name.out -` |
 | `err` | stderr | Same as `out` except for standard error output |
 | `args` | main arguments | Each line of this file forms one additional argument. All arguments are then append to your base command. Does not affect `genin` or `gen` |
-| `exit` | exit code | First line of file must be parsable integer, rest of file is ignored. Currently your program's exit code must exactly match parsed value. TODO: allow ranges and "nonzero" special value |
+| `exit` | exit code | First line of file must be parsable integer, rest of file is ignored. Currently program exit code must exactly match parsed value. TODO: allow ranges and "nonzero" special value |
 | `genin` | input generator | First line must be a path pointing to executable, rest of file are arguments parsed in same way as `args`. Will be executed before your program and its output will be overwrite content of `name.in` |
 | `gen` | solution generator | Same as `genin` except: stdin for this executable is `name.in`, output will overwrite `name.out` and `name.err` |
 | `timeout` | general timeout | First line of file must be parsable integer, rest of file is ignored. Default timeout is usually 10 seconds for any part of any test case. Affects your program, `genin` and `gen`. If any part of test case timeouts then whole test case is skipped |
-| `rundir` | working directory | First line must be valid path, rest of file is ignored. Affects your program, `genin` and `gen`. Is equivalent to `cd`ing before program execution |
-| `outfiles` | output files | Each line of this file must be valid path (with root at `rundir`) that is produced by `gen` and/or your program. Each output file will be moved to the test directory and its name will be prepended with `name.outf_user` or `name.outf_ref` depending on being out of your program or `gen` respectively |
-| **Planned extensions** | | |
+| `rundir` | working directory | First line must be valid path, rest of file is ignored. Affects your program, `genin` and `gen`. Is equivalent to `cd`ing before test execution |
+| `infiles` | input files | Each line of this file must be a valid path (with root at test directory) that is either supplied or produced by genin. If there is no variable expansion in main arguments, then every file is copied to `rundir` |
+| `outfiles` | output files | Same format as `infiles`. Output files of `gen` are copied from `rundir` and saved as `name.outfile` in test directory, files also may be supplied in test directory like `infiles`. Output files from main are left intact at `rundir` |
 | `desc` | description | Content of whole file is printed after test header |
+| `envmap` | console environment | Each 2 lines are mapped to `[first line] = [second line]` and passed to console environment (as extension of current console environment) |
+| **Planned extensions** | | |
 | `prerun` and `postrun` | pre and post run tasks | Same format as `gen` tasks, run before/after your program. Eg. for compiling etc. |
-| `envmap` | console environment | Per line mapping to change console environment |
+
+##### Argument expasion for input/output files:
+
+Every argument of main, `genin` or `gen` is passed through variable expansion, current variables are:
+
+- `$$INPUT_FILES_<arg>$$` - replaced with input file, where <arg> is either parseable number -> `infiles`[number], or is anything else -> join(`infiles`, <arg>)
+- `$$OUTPUT_FILES_<arg>$$` - same as `INPUT_FILES` but for `outfiles`
+- `$$TEST_FOLDER$$` - replaced with absolute path of test directory
+- `$$RUN_DIRECTORY$$` - replaced with absolute path of run directory (either current working directory (cwd) or `rundir`)
 
 ### Description of test output
+
+## TODO: update to version 2.0
 
 ```
 ===== TEST name =====   <-------------------------------- test header
