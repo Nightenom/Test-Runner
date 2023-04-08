@@ -287,11 +287,10 @@ public class TestRunner
 
         boolean isCorrect = true;
 
-        for (final Path out : test.outFiles)
+        for (final Path user : test.outFiles)
         {
-            final String fileName = out.getFileName().toString();
-            final Path user = test.runDir.resolve(fileName).toAbsolutePath().normalize();
-            final Path reference = testFolder.resolve(test.name + "." + fileName);
+            final String fileName = user.getFileName().toString();
+            final Path reference = testFolder.resolve(test.runDir.relativize(user));
 
             if (debug)
             {
@@ -300,14 +299,14 @@ public class TestRunner
 
             if (!Files.exists(user))
             {
-                System.out.println("Missing user output file of name: \"" + fileName + "\" at: " + user.toString());
+                System.out.println("Missing user output file of name \"" + fileName + "\" at: " + user.toString());
                 System.out.println();
 
                 isCorrect = false;
             }
             else if (!Files.exists(reference))
             {
-                System.out.println("Missing reference output file of name: \"" + fileName + "\" at: " + reference.toString());
+                System.out.println("Missing reference output file of name \"" + fileName + "\" at: " + reference.toString());
                 System.out.println();
 
                 isCorrect = false;
@@ -319,24 +318,21 @@ public class TestRunner
                 {
                     System.out.println("Output file \"" + fileName + "\" does not match reference, relative byte lookup:");
 
-                    final long userSize = Files.size(user);
-                    final long referenceSize = Files.size(reference);
-                    final ByteBuffer buffer =
-                        ByteBuffer.allocate((int) Math.min(2 * DUMP_AROUND_SIZE + 1, Math.min(userSize, referenceSize)));
+                    final ByteBuffer buffer = ByteBuffer.allocate(2 * DUMP_AROUND_SIZE + 1);
                     final long position = Math.max(0, firstMismatchByte - DUMP_AROUND_SIZE);
 
                     try (var fd = Files.newByteChannel(user, StandardOpenOption.READ))
                     {
                         fd.position(position).read(buffer);
                     }
-                    final byte[] userBytes = Arrays.copyOf(buffer.array(), buffer.capacity());
+                    final byte[] userBytes = Arrays.copyOf(buffer.array(), buffer.position());
 
                     buffer.clear();
                     try (var fd = Files.newByteChannel(reference, StandardOpenOption.READ))
                     {
                         fd.position(position).read(buffer);
                     }
-                    final byte[] referenceBytes = Arrays.copyOf(buffer.array(), buffer.capacity());
+                    final byte[] referenceBytes = Arrays.copyOf(buffer.array(), buffer.position());
 
                     compareByteSolutions(userBytes, referenceBytes, fileName);
 
@@ -382,7 +378,7 @@ public class TestRunner
         else if (processBuffer.length > 0)
         {
             final String result = new String(processBuffer);
-            System.out.printf("Result %s should be empty:%n%s%n", streamName, result.substring(0, Math.min(1000, result.length())));
+            System.out.printf("Result %s should be empty:%n%s%n", streamName, result.substring(0, Math.min(5000, result.length())));
             return false;
         }
         return true;
